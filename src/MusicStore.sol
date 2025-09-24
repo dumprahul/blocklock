@@ -2,12 +2,14 @@
 pragma solidity ^0.8.28;
 
 import {Ownable} from "./utils/Ownable.sol";
+import {TypesLib} from "blocklock-solidity/src/libraries/TypesLib.sol";
+
 
 /// @title MusicStore
 /// @notice Stores AES-GCM ciphertext and metadata for music content, per album ID
 contract MusicStore is Ownable {
     struct AlbumCipher {
-        bytes ciphertext;
+        TypesLib.Ciphertext ciphertext; // store full Blocklock ciphertext struct
         bytes iv;
         bytes tag;
     }
@@ -16,11 +18,11 @@ contract MusicStore is Ownable {
     uint256[] private albumIds;
     mapping(uint256 => bool) private albumExists;
 
-    event MusicStored(uint256 indexed albumId, uint256 ciphertextLength);
+    event MusicStored(uint256 indexed albumId);
 
     function storeAlbum(
         uint256 albumId,
-        bytes calldata ciphertext,
+        TypesLib.Ciphertext calldata ciphertext,
         bytes calldata ivBytes,
         bytes calldata tagBytes
     ) external onlyOwner {
@@ -29,12 +31,12 @@ contract MusicStore is Ownable {
             albumIds.push(albumId);
         }
         albums[albumId] = AlbumCipher(ciphertext, ivBytes, tagBytes);
-        emit MusicStored(albumId, ciphertext.length);
+        emit MusicStored(albumId);
     }
 
     function getAlbum(uint256 albumId) external view returns (bytes memory, bytes memory, bytes memory) {
         AlbumCipher storage a = albums[albumId];
-        return (a.ciphertext, a.iv, a.tag);
+        return (abi.encode(a.ciphertext), a.iv, a.tag);
     }
 
     function getAlbumIds() external view returns (uint256[] memory) {

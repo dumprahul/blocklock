@@ -68,7 +68,6 @@ contract SubscriptionManager is Ownable {
     /// @param condition Encoded Blocklock condition
     /// @param iv 12-byte IV for AES-GCM (media)
     /// @param tag 16-byte tag for AES-GCM (media)
-    /// @param data Ciphertext bytes (media)
     /// @param blocklockCipher Blocklock ciphertext struct for timelock decrypt
     function createAlbumWithConfig(
         uint256 albumId,
@@ -76,14 +75,13 @@ contract SubscriptionManager is Ownable {
         bytes calldata condition,
         bytes12 iv,
         bytes16 tag,
-        bytes calldata data,
         TypesLib.Ciphertext calldata blocklockCipher
     ) external onlyOwner {
         require(address(blocklockManager) != address(0), "Manager not set");
         require(address(musicStore) != address(0), "Store not set");
         albumPriceWei[albumId] = priceWei;
         emit AlbumPlanSet(albumId, priceWei);
-        musicStore.storeAlbum(albumId, data, bytes.concat(iv), bytes.concat(tag));
+        musicStore.storeAlbum(albumId,blocklockCipher,bytes.concat(iv), bytes.concat(tag));
         blocklockManager.setAlbumConfig(albumId, condition, blocklockCipher);
     }
 
