@@ -21,6 +21,7 @@ contract BlocklockManager is AbstractBlocklockReceiver {
 
     event FanTimelockCreated(address indexed fan, uint256 indexed requestId);
     event FanKeyUnlocked(address indexed fan);
+    event AlbumConfigSet(uint256 indexed albumId);
 
     SubscriptionManager public subscriptionManager;
 
@@ -28,6 +29,14 @@ contract BlocklockManager is AbstractBlocklockReceiver {
     mapping(address => mapping(uint256 => FanLock)) public fanAlbumLocks;
     mapping(uint256 => address) private requestIdToFan;
     mapping(uint256 => uint256) private requestIdToAlbumId;
+
+    // Per-album stored Blocklock config (artist-defined)
+    struct AlbumConfig {
+        bytes condition;
+        TypesLib.Ciphertext cipher;
+        bool exists;
+    }
+    mapping(uint256 => AlbumConfig) public albumConfigs;
 
     constructor(address blocklockSender, address subscriptionManagerAddress)
         AbstractBlocklockReceiver(blocklockSender)
@@ -39,6 +48,17 @@ contract BlocklockManager is AbstractBlocklockReceiver {
     function setSubscriptionManager(address subscriptionManagerAddress) external onlyAdmin {
         subscriptionManager = SubscriptionManager(subscriptionManagerAddress);
     }
+
+    function setAlbumConfig(
+        uint256 albumId,
+        bytes calldata condition,
+        TypesLib.Ciphertext calldata cipher
+    ) external onlyAdmin {
+        albumConfigs[albumId] = AlbumConfig({condition: condition, cipher: cipher, exists: true});
+        emit AlbumConfigSet(albumId);
+    }
+
+    // raw setter removed in favor of setAlbumConfig with full Ciphertext
 
     function createTimelockForFan(
         address fan,
@@ -58,11 +78,27 @@ contract BlocklockManager is AbstractBlocklockReceiver {
     function createTimelockForFanAlbum(
         address fan,
         uint256 albumId,
-        TypesLib.Ciphertext calldata cipher,
-        bytes calldata condition,
         uint32 callbackGasLimit
     ) external payable onlyAdmin returns (uint256 requestId, uint256 price) {
         require(subscriptionManager.isAlbumSubscriber(fan, albumId), "Not subscribed to album");
+        AlbumConfig storage cfg = albumConfigs[albumId];
+        require(cfg.exists, "Album config missing");
+        // Call external helper to satisfy calldata requirements
+        (uint256 _requestId, uint256 _price) = this._createTimelockForFanAlbumFromConfig{
+            value: msg.value
+        }(fan, albumId, cfg.condition, cfg.cipher, callbackGasLimit);
+        return (_requestId, _price);
+    }
+
+    // External helper restricted to self-calls to pass calldata into _requestBlocklockPayInNative
+    function _createTimelockForFanAlbumFromConfig(
+        address fan,
+        uint256 albumId,
+        bytes calldata condition,
+        TypesLib.Ciphertext calldata cipher,
+        uint32 callbackGasLimit
+    ) external payable returns (uint256 requestId, uint256 price) {
+        require(msg.sender == address(this), "Internal only");
         (uint256 _requestId, uint256 _price) = _requestBlocklockPayInNative(callbackGasLimit, condition, cipher);
         fanAlbumLocks[fan][albumId] = FanLock({cipher: cipher, decryptedPayload: bytes(""), unlocked: false});
         requestIdToFan[_requestId] = fan;

@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Ownable} from "./utils/Ownable.sol";
 import {BlocklockManager} from "./BlocklockManager.sol";
+import {MusicStore} from "./MusicStore.sol";
 import {TypesLib} from "blocklock-solidity/src/libraries/TypesLib.sol";
 
 /// @title SubscriptionManager
@@ -17,6 +18,7 @@ contract SubscriptionManager is Ownable {
     mapping(address => bool) public isSubscriber; // global legacy toggle
     uint256 public subscribePriceWei; // legacy/global price
     BlocklockManager public blocklockManager;
+    MusicStore public musicStore;
 
     // Per-album plans and subscriptions
     mapping(uint256 => uint256) public albumPriceWei; // albumId -> price
@@ -28,6 +30,10 @@ contract SubscriptionManager is Ownable {
 
     function setBlocklockManager(address payable manager) external onlyOwner {
         blocklockManager = BlocklockManager(manager);
+    }
+
+    function setMusicStore(address store) external onlyOwner {
+        musicStore = MusicStore(store);
     }
 
     function setPrice(uint256 priceWei) external onlyOwner {
@@ -56,43 +62,36 @@ contract SubscriptionManager is Ownable {
         emit AlbumSubscribed(msg.sender, albumId, msg.value);
     }
 
-    /// @notice Subscribe and immediately create a Blocklock timelock for the fan
-    /// @dev msg.value must cover subscription price + Blocklock callback funding
-    /// @param condition Encoded Blocklock condition (e.g., target block height)
-    /// @param cipher Fan-specific Blocklock ciphertext
-    /// @param callbackGasLimit Gas limit for Blocklock callback
-    function subscribeWithTimelock(
+    /// @notice Single-call album creation for artists
+    /// @param albumId Album identifier
+    /// @param priceWei Subscription price for the album
+    /// @param condition Encoded Blocklock condition
+    /// @param iv 12-byte IV for AES-GCM (media)
+    /// @param tag 16-byte tag for AES-GCM (media)
+    /// @param data Ciphertext bytes (media)
+    /// @param blocklockCipher Blocklock ciphertext struct for timelock decrypt
+    function createAlbumWithConfig(
+        uint256 albumId,
+        uint256 priceWei,
         bytes calldata condition,
-        TypesLib.Ciphertext calldata cipher,
-        uint32 callbackGasLimit
-    ) external payable {
+        bytes12 iv,
+        bytes16 tag,
+        bytes calldata data,
+        TypesLib.Ciphertext calldata blocklockCipher
+    ) external onlyOwner {
         require(address(blocklockManager) != address(0), "Manager not set");
-        require(!isSubscriber[msg.sender], "Already subscribed");
-        require(msg.value >= subscribePriceWei, "Insufficient payment");
-
-        uint256 forwardAmount = msg.value - subscribePriceWei;
-        isSubscriber[msg.sender] = true;
-        emit Subscribed(msg.sender, msg.value);
-
-        (uint256 requestId, uint256 price) = blocklockManager.createTimelockForFan{value: forwardAmount}(
-            msg.sender,
-            cipher,
-            condition,
-            callbackGasLimit
-        );
-        emit TimelockRequested(msg.sender, requestId, forwardAmount);
-        // Note: If forwardAmount < price, BlocklockManager call will revert
+        require(address(musicStore) != address(0), "Store not set");
+        albumPriceWei[albumId] = priceWei;
+        emit AlbumPlanSet(albumId, priceWei);
+        musicStore.storeAlbum(albumId, data, bytes.concat(iv), bytes.concat(tag));
+        blocklockManager.setAlbumConfig(albumId, condition, blocklockCipher);
     }
 
-    /// @notice Subscribe to album and auto-create timelock in one call
-    /// @param albumId Album identifier whose plan must be set
-    /// @param condition Encoded Blocklock condition
-    /// @param cipher Fan-specific Blocklock ciphertext (album-specific if needed)
+    /// @notice Subscribe to album and auto-create timelock using artist-configured album condition/cipher
+    /// @param albumId Album identifier configured in BlocklockManager
     /// @param callbackGasLimit Gas limit for callback
     function subscribeAlbumWithTimelock(
         uint256 albumId,
-        bytes calldata condition,
-        TypesLib.Ciphertext calldata cipher,
         uint32 callbackGasLimit
     ) external payable {
         require(address(blocklockManager) != address(0), "Manager not set");
@@ -105,10 +104,9 @@ contract SubscriptionManager is Ownable {
         isAlbumSubscriber[msg.sender][albumId] = true;
         emit AlbumSubscribed(msg.sender, albumId, msg.value);
 
-        (uint256 requestId, uint256 _price) = blocklockManager.createTimelockForFan{value: forwardAmount}(
+        (uint256 requestId, uint256 _price) = blocklockManager.createTimelockForFanAlbum{value: forwardAmount}(
             msg.sender,
-            cipher,
-            condition,
+            albumId,
             callbackGasLimit
         );
         emit TimelockRequested(msg.sender, requestId, forwardAmount);

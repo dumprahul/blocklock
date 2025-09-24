@@ -23,6 +23,7 @@ contract DeployMusicBlocklock is Script {
         blocklockManager = new BlocklockManager(blocklockSender, address(subscriptionManager));
 
         subscriptionManager.setBlocklockManager(payable(address(blocklockManager)));
+        subscriptionManager.setMusicStore(address(musicStore));
 
         console.log("SubscriptionManager:", address(subscriptionManager));
         console.log("MusicStore:", address(musicStore));
